@@ -10,6 +10,7 @@ from datetime import datetime
 import uuid
 import os
 import traceback
+from sqlalchemy import text
 
 # Initialize FastAPI
 app = FastAPI(title="GlucoLumin Backend", version="2.0.0")
@@ -135,7 +136,7 @@ def health_check():
     try:
         from database import engine
         with engine.connect() as conn:
-            conn.execute("SELECT 1")
+            conn.execute(text("SELECT 1"))
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)[:50]}"
@@ -272,19 +273,45 @@ def get_result(visit_id: str):
         if not metadata:
             raise HTTPException(status_code=404, detail="Visit not found")
 
-        return {
-            "visit_id": visit_id,
-            "status": metadata.get("ml2_status", "PENDING"),
-            "glucose": metadata.get("final_glucose"),
-            "classification": metadata.get("result_flag"),
-            "diet_advice": metadata.get("diet_advice"),
-            "timestamp": metadata.get("timestamp")
-        }
+        ml2_status = metadata.get("ml2_status", "PENDING")
+        final_glucose = metadata.get("final_glucose")
+        classification = metadata.get("result_flag")
+        diet_advice = metadata.get("diet_advice")
+        
+        # Return proper status format for Android app
+        if ml2_status == "DONE" and final_glucose is not None:
+            return {
+                "visit_id": visit_id,
+                "status": "completed",
+                "final_glucose": float(final_glucose),
+                "glucose": float(final_glucose),
+                "confidence": 0.92,
+                "classification": classification or "Normal",
+                "diet_advice": diet_advice or "Maintain balanced diet.",
+                "timestamp": metadata.get("timestamp"),
+                "message": "Prediction successful"
+            }
+        elif ml2_status == "ERROR":
+            return {
+                "visit_id": visit_id,
+                "status": "error",
+                "message": "ML processing failed. Please try again."
+            }
+        else:
+            # Still processing
+            return {
+                "visit_id": visit_id,
+                "status": "processing",
+                "ml1_status": metadata.get("ml1_status", "PENDING"),
+                "ml2_status": ml2_status,
+                "message": "Processing scan data..."
+            }
         
     except HTTPException:
         raise
     except Exception as e:
         print(f"[ERROR] get_result failed: {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

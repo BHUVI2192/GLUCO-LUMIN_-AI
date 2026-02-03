@@ -180,5 +180,5 @@ def get_result(visit_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    # Pre-load model on main execution as well if needed
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))  # Railway provides PORT
+    uvicorn.run(app, host="0.0.0.0", port=port)

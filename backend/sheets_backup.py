@@ -4,6 +4,7 @@ Non-blocking backup layer using background threads
 Railway Production Ready - Graceful failure handling
 """
 import os
+import json
 import threading
 import queue
 import time
@@ -82,29 +83,53 @@ class AsyncSheetsBackup:
             print("[SheetsBackup] Disabled - gspread not installed")
     
     def _authenticate(self) -> bool:
-        """Authenticate with Google Sheets API using google-auth"""
+        """Authenticate with Google Sheets API using google-auth.
+        
+        Supports two authentication methods:
+        1. GOOGLE_SHEETS_CREDENTIALS environment variable (Railway production)
+        2. credentials.json file (local development)
+        """
         if not GSPREAD_AVAILABLE:
             return False
             
         if self.client and self.is_connected:
             return True
-            
-        if not os.path.exists(CREDENTIALS_FILE):
-            print(f"[SheetsBackup] Warning: {CREDENTIALS_FILE} not found. Backup disabled.")
+        
+        creds = None
+        auth_method = None
+        
+        # Method 1: Try environment variable first (Railway production)
+        creds_json = os.getenv('GOOGLE_SHEETS_CREDENTIALS')
+        if creds_json:
+            try:
+                creds_dict = json.loads(creds_json)
+                creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
+                auth_method = "environment variable"
+            except json.JSONDecodeError as e:
+                print(f"[SheetsBackup] Invalid JSON in GOOGLE_SHEETS_CREDENTIALS: {e}")
+            except Exception as e:
+                print(f"[SheetsBackup] Error parsing env credentials: {e}")
+        
+        # Method 2: Fallback to file (local development)
+        if not creds and os.path.exists(CREDENTIALS_FILE):
+            try:
+                creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPE)
+                auth_method = "credentials.json file"
+            except Exception as e:
+                print(f"[SheetsBackup] Error loading file credentials: {e}")
+        
+        # If no credentials found
+        if not creds:
+            print(f"[SheetsBackup] No credentials available. Set GOOGLE_SHEETS_CREDENTIALS env var or provide {CREDENTIALS_FILE}")
             return False
         
         try:
-            # Use google-auth instead of deprecated oauth2client
-            creds = Credentials.from_service_account_file(
-                CREDENTIALS_FILE,
-                scopes=SCOPE
-            )
             self.client = gspread.authorize(creds)
             self.is_connected = True
-            print("[SheetsBackup] Authentication successful")
+            print(f"[SheetsBackup] Authentication successful (via {auth_method})")
             return True
         except Exception as e:
-            print(f"[SheetsBackup] Authentication failed: {e}")
+            print(f"[SheetsBackup] Authorization failed: {e}")
             self.is_connected = False
             return False
     

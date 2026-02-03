@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
+from type_utils import numpy_to_python
 
 # Database URL from environment variable (Railway provides this automatically)
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -126,6 +127,9 @@ def get_db() -> Session:
 def add_patient_metadata(data: Dict[str, Any]) -> bool:
     """Add patient metadata to database"""
     try:
+        # Convert NumPy types to Python natives
+        data = numpy_to_python(data)
+        
         with get_db() as db:
             # Convert timestamp string to datetime if needed
             if 'timestamp' in data and isinstance(data['timestamp'], str):
@@ -169,6 +173,9 @@ def add_raw_data(rows: List[Dict[str, Any]]) -> bool:
     if not rows:
         return True
     try:
+        # Convert NumPy types to Python natives
+        rows = numpy_to_python(rows)
+        
         with get_db() as db:
             for row in rows:
                 scan = RawScanData(
@@ -188,6 +195,9 @@ def add_raw_data(rows: List[Dict[str, Any]]) -> bool:
 def update_patient_status(visit_id: str, updates: Dict[str, Any]) -> bool:
     """Update patient metadata fields"""
     try:
+        # Convert NumPy types to Python natives
+        updates = numpy_to_python(updates)
+        
         with get_db() as db:
             patient = db.query(PatientMetadata).filter(
                 PatientMetadata.visit_id == visit_id
@@ -211,6 +221,9 @@ def update_patient_status(visit_id: str, updates: Dict[str, Any]) -> bool:
 def add_features(visit_id: str, features: Dict[str, Any]) -> bool:
     """Save extracted features"""
     try:
+        # Convert NumPy types to Python natives (critical for ML pipeline data)
+        features = numpy_to_python(features)
+        
         with get_db() as db:
             feat = IntermediateFeatures(
                 visit_id=visit_id,
@@ -238,6 +251,9 @@ def add_features(visit_id: str, features: Dict[str, Any]) -> bool:
 def add_clinical_result(result: Dict[str, Any]) -> bool:
     """Save clinical result"""
     try:
+        # Convert NumPy types to Python natives
+        result = numpy_to_python(result)
+        
         with get_db() as db:
             # Convert timestamp if needed
             ts = result.get('timestamp')

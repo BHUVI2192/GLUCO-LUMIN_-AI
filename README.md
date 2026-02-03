@@ -1,12 +1,12 @@
-# 🩺 GlucoLumin AI
+# 🩺 GlucoLumin AI - Backend API
 
 **Non-Invasive Glucose Monitoring System powered by Machine Learning**
 
 GlucoLumin AI is a cutting-edge clinical validation system that predicts blood glucose levels using non-invasive sensor technology combined with advanced machine learning algorithms.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python)
-![Next.js](https://img.shields.io/badge/Next.js-16+-black?logo=next.js)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?logo=fastapi)
+![Railway](https://img.shields.io/badge/Railway-Deployed-blueviolet?logo=railway)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ---
@@ -18,10 +18,9 @@ GlucoLumin AI is a cutting-edge clinical validation system that predicts blood g
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Installation](#-installation)
-- [Usage](#-usage)
+- [Deployment](#-deployment)
 - [API Endpoints](#-api-endpoints)
 - [ML Pipeline](#-ml-pipeline)
-- [Contributing](#-contributing)
 - [License](#-license)
 
 ---
@@ -33,8 +32,7 @@ GlucoLumin AI is a cutting-edge clinical validation system that predicts blood g
 - **Real-Time Processing**: Fast prediction with continuous monitoring support
 - **Patient Management**: Complete patient registration and visit tracking
 - **Clinical Reports**: Automatic classification (Normal, Low, High) with personalized diet advice
-- **Web Serial API**: Direct hardware communication through the browser
-- **Mobile-First Design**: Responsive interface optimized for clinical use
+- **REST API**: Clean, documented endpoints for easy integration
 
 ---
 
@@ -42,18 +40,18 @@ GlucoLumin AI is a cutting-edge clinical validation system that predicts blood g
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        GlucoLumin AI                            │
+│                    GlucoLumin AI Backend                        │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
-│   │   Frontend   │───▶│   Backend    │───▶│  ML Pipeline │     │
-│   │  (Next.js)   │    │  (FastAPI)   │    │ (LinearReg)  │     │
+│   │   FastAPI    │───▶│  ML Pipeline │───▶│   Results    │     │
+│   │   Server     │    │ (LinearReg)  │    │   Storage    │     │
 │   └──────────────┘    └──────────────┘    └──────────────┘     │
 │          │                   │                   │              │
 │          ▼                   ▼                   ▼              │
 │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
-│   │  Web Serial  │    │  CSV Storage │    │   Trained    │     │
-│   │     API      │    │   Manager    │    │    Model     │     │
+│   │  Endpoints   │    │   Trained    │    │     CSV      │     │
+│   │  /api/*      │    │    Model     │    │   Manager    │     │
 │   └──────────────┘    └──────────────┘    └──────────────┘     │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -63,7 +61,6 @@ GlucoLumin AI is a cutting-edge clinical validation system that predicts blood g
 
 ## 🛠 Tech Stack
 
-### Backend
 - **FastAPI** - High-performance Python web framework
 - **Uvicorn** - ASGI server
 - **Pandas & NumPy** - Data processing
@@ -71,39 +68,21 @@ GlucoLumin AI is a cutting-edge clinical validation system that predicts blood g
 - **SciPy** - Signal processing & wavelet analysis
 - **PyWavelets** - Wavelet decomposition
 
-### Frontend
-- **Next.js 16** - React framework
-- **TypeScript** - Type-safe JavaScript
-- **Tailwind CSS** - Utility-first styling
-- **Lucide React** - Icon library
-- **Web Serial API** - Hardware communication
-
 ---
 
 ## 📁 Project Structure
 
 ```
-GLUCO LUMIN AI/
+GLUCO-LUMIN_-AI/
 ├── backend/
 │   ├── main.py              # FastAPI application & endpoints
 │   ├── ml_pipeline.py       # 2-Stage ML processing pipeline
 │   ├── csv_manager.py       # CSV data persistence layer
 │   ├── sheets_manager.py    # Google Sheets integration
-│   ├── requirements.txt     # Python dependencies
-│   ├── patient_metadata.csv # Patient records
-│   ├── raw_scan_data.csv    # Raw sensor readings
-│   └── clinical_results.csv # Final predictions
+│   └── requirements.txt     # Python dependencies
 │
-├── frontend/
-│   ├── app/
-│   │   ├── page.tsx         # Main application page
-│   │   ├── layout.tsx       # Root layout
-│   │   └── globals.css      # Global styles
-│   ├── hooks/               # Custom React hooks
-│   ├── lib/                 # Utility functions
-│   ├── package.json         # Node.js dependencies
-│   └── tailwind.config.ts   # Tailwind configuration
-│
+├── Procfile                 # Railway deployment config
+├── railway.json             # Railway settings
 └── README.md
 ```
 
@@ -113,14 +92,13 @@ GLUCO LUMIN AI/
 
 ### Prerequisites
 - Python 3.10+
-- Node.js 18+
-- npm or yarn
 
-### Backend Setup
+### Local Setup
 
 ```bash
-# Navigate to backend directory
-cd backend
+# Clone the repository
+git clone https://github.com/BHUVI2192/GLUCO-LUMIN_-AI.git
+cd GLUCO-LUMIN_-AI
 
 # Create virtual environment
 python -m venv venv
@@ -132,46 +110,29 @@ venv\Scripts\activate
 source venv/bin/activate
 
 # Install dependencies
+cd backend
 pip install -r requirements.txt
 
-# Install additional dependencies for signal processing
-pip install pywavelets joblib
-```
-
-### Frontend Setup
-
-```bash
-# Navigate to frontend directory
-cd frontend
-
-# Install dependencies
-npm install
-
-# Or using yarn
-yarn install
-```
-
----
-
-## 💻 Usage
-
-### Start Backend Server
-
-```bash
-cd backend
+# Run the server
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The backend will be available at `http://localhost:8000`
+The API will be available at `http://localhost:8000`
 
-### Start Frontend Development Server
+---
 
-```bash
-cd frontend
-npm run dev
-```
+## 🚂 Deployment (Railway)
 
-The frontend will be available at `http://localhost:3000`
+This project is configured for easy deployment on Railway:
+
+1. **Fork/Clone** this repository
+2. **Connect** to Railway via GitHub
+3. **Deploy** - Railway will automatically detect the configuration
+
+Railway will use the `Procfile` and `railway.json` for deployment settings.
+
+### Environment Variables (Optional)
+No environment variables required for basic functionality.
 
 ---
 
@@ -184,29 +145,75 @@ The frontend will be available at `http://localhost:3000`
 | `POST` | `/api/upload_raw` | Upload raw sensor data |
 | `GET` | `/api/get_result/{visit_id}` | Retrieve prediction results |
 
-### Example: Start Scan
+### Health Check
 
+```bash
+curl https://your-app.railway.app/
+```
+
+Response:
 ```json
-POST /api/start_scan
 {
-  "patient_name": "John Doe",
-  "patient_age": 35,
-  "gender": "Male",
-  "height_cm": 175.0,
-  "weight_kg": 70.0,
-  "skin_tone": "Medium",
-  "blood_pressure": "120/80",
-  "had_food": "No",
-  "family_diabetic_history": "No"
+  "message": "GlucoLumin AI Backend is Running",
+  "status": "active"
 }
 ```
 
-### Example: Response
+### Start Scan
 
+```bash
+curl -X POST https://your-app.railway.app/api/start_scan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "patient_name": "John Doe",
+    "patient_age": 35,
+    "gender": "Male",
+    "height_cm": 175.0,
+    "weight_kg": 70.0,
+    "skin_tone": "Medium",
+    "blood_pressure": "120/80",
+    "had_food": "No",
+    "family_diabetic_history": "No"
+  }'
+```
+
+Response:
 ```json
 {
   "visit_id": "V20260203_A1B2C3",
   "status": "registered"
+}
+```
+
+### Upload Raw Data
+
+```bash
+curl -X POST https://your-app.railway.app/api/upload_raw \
+  -H "Content-Type: application/json" \
+  -d '{
+    "lines": [
+      "V20260203_A1B2C3,0,95.2",
+      "V20260203_A1B2C3,1,94.8",
+      "V20260203_A1B2C3,2,95.5"
+    ]
+  }'
+```
+
+### Get Result
+
+```bash
+curl https://your-app.railway.app/api/get_result/V20260203_A1B2C3
+```
+
+Response:
+```json
+{
+  "visit_id": "V20260203_A1B2C3",
+  "status": "DONE",
+  "glucose": 94.5,
+  "classification": "Normal",
+  "diet_advice": "NORMAL: Maintain balanced diet.",
+  "timestamp": "2026-02-03T16:30:00"
 }
 ```
 
@@ -242,50 +249,9 @@ GlucoLumin uses a **2-Stage Machine Learning Pipeline**:
 
 ---
 
-## 🧪 Testing
-
-### Run ML Pipeline Tests
-
-```bash
-cd backend
-python ml_pipeline.py --test
-```
-
-### Manual API Testing
-
-```bash
-# Health check
-curl http://localhost:8000/
-
-# Start a scan
-curl -X POST http://localhost:8000/api/start_scan \
-  -H "Content-Type: application/json" \
-  -d '{"patient_name":"Test User","patient_age":30,"height_cm":170,"weight_kg":65,"skin_tone":"Medium","blood_pressure":"120/80","had_food":"No","family_diabetic_history":"No"}'
-```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
----
-
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 👥 Team
-
-**GlucoLumin AI** - Revolutionizing diabetes management through non-invasive technology.
+This project is licensed under the MIT License.
 
 ---
 

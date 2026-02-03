@@ -5,19 +5,29 @@ Primary storage with SQLAlchemy ORM
 import os
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
 
-# Database URL from environment variable (fallback for local dev)
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", 
-    "postgresql://postgres:PYMfvqFNwvMULtUnXdwDmsWiiXrhZGGr@switchyard.proxy.rlwy.net:38500/railway"
-)
+# Database URL from environment variable (Railway provides this automatically)
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Create engine
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
+if not DATABASE_URL:
+    # Fallback for local development
+    DATABASE_URL = "postgresql://postgres:PYMfvqFNwvMULtUnXdwDmsWiiXrhZGGr@switchyard.proxy.rlwy.net:38500/railway"
+    print("[Database] Using fallback DATABASE_URL")
+else:
+    print("[Database] Using Railway DATABASE_URL")
+
+# Create engine with connection pooling for Railway
+engine = create_engine(
+    DATABASE_URL, 
+    pool_pre_ping=True, 
+    pool_recycle=300,
+    pool_size=5,
+    max_overflow=10
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

@@ -13,7 +13,7 @@ import os
 import asyncio
 from datetime import datetime
 from csv_manager import (
-    RAW_SCAN_DATA_FILE, update_patient_status, save_features, save_clinical_result, get_patient_metadata
+    update_patient_status, save_features, save_clinical_result, get_patient_metadata, get_raw_data
 )
 
 # Constants
@@ -240,24 +240,29 @@ class MLPipeline:
 
         try:
             # --- STAGE 1: SIGNAL PROCESSING & CALIBRATION ---
-            if not os.path.exists(RAW_SCAN_DATA_FILE):
-                raise FileNotFoundError("Raw data file not found.")
+            # Read from PostgreSQL database (not CSV files)
+            raw_data = get_raw_data(visit_id)
             
-            raw_df = pd.read_csv(RAW_SCAN_DATA_FILE)
-            patient_data = raw_df[raw_df['visit_id'] == visit_id]
+            if not raw_data:
+                print(f"[{visit_id}] No raw data found in database")
+                return
             
-            if patient_data.empty: return
+            patient_data = pd.DataFrame(raw_data)
+            
+            if patient_data.empty:
+                print(f"[{visit_id}] Empty patient data")
+                return
 
             # Clean signal: Convert to numeric, coerce errors (e.g. "No finger?") to NaN, then drop
             raw_signal = pd.to_numeric(patient_data['signal_value'], errors='coerce')
             raw_signal = raw_signal.dropna()
             
             if raw_signal.empty:
-                 print(f"[{visit_id}] No valid numeric signal data found (all 'No finger?' or errors).")
-                 return
+                print(f"[{visit_id}] No valid numeric signal data found (all 'No finger?' or errors).")
+                return
 
             signal = raw_signal.values
-            if len(signal) < 5: 
+            if len(signal) < 5:
                 print(f"[{visit_id}] Insufficient signal length after cleaning: {len(signal)}")
                 return
 

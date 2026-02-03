@@ -1,14 +1,23 @@
 """
 Async Google Sheets Backup for GlucoLumin
 Non-blocking backup layer using background threads
+Railway Production Ready - Graceful failure handling
 """
 import os
 import threading
 import queue
 import time
 from typing import Dict, Any, List
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+
+# Try to import gspread with new google-auth
+SHEETS_AVAILABLE = False
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    GSPREAD_AVAILABLE = False
+    print("[SheetsBackup] gspread not available")
 
 # Constants
 CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), "credentials.json")
@@ -19,14 +28,15 @@ SHEET_NAME_FEATURES = "GlucoLumin_Intermediate_Features"
 
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets"
 ]
 
 # Retry settings
 MAX_RETRIES = 3
-RETRY_DELAY_BASE = 2  # Exponential backoff base (seconds)
+RETRY_DELAY_BASE = 2
 
-# Column definitions (same as csv_manager)
+# Column definitions
 PATIENT_METADATA_COLS = [
     "visit_id", "patient_id", 
     "name", "age", "sex", "height_cm", "weight_kg", 
@@ -50,7 +60,7 @@ CLINICAL_RESULTS_COLS = [
 
 
 class AsyncSheetsBackup:
-    """Non-blocking Google Sheets backup manager"""
+    """Non-blocking Google Sheets backup manager with graceful failure handling"""
     
     def __init__(self):
         self.client = None
@@ -65,11 +75,17 @@ class AsyncSheetsBackup:
         self._raw_data_sheet = None
         self._features_sheet = None
         
-        # Start background worker
-        self._start_worker()
+        # Only start if gspread is available
+        if GSPREAD_AVAILABLE:
+            self._start_worker()
+        else:
+            print("[SheetsBackup] Disabled - gspread not installed")
     
     def _authenticate(self) -> bool:
-        """Authenticate with Google Sheets API"""
+        """Authenticate with Google Sheets API using google-auth"""
+        if not GSPREAD_AVAILABLE:
+            return False
+            
         if self.client and self.is_connected:
             return True
             
@@ -78,7 +94,11 @@ class AsyncSheetsBackup:
             return False
         
         try:
-            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SCOPE)
+            # Use google-auth instead of deprecated oauth2client
+            creds = Credentials.from_service_account_file(
+                CREDENTIALS_FILE,
+                scopes=SCOPE
+            )
             self.client = gspread.authorize(creds)
             self.is_connected = True
             print("[SheetsBackup] Authentication successful")
@@ -149,7 +169,6 @@ class AsyncSheetsBackup:
         """Main worker loop that processes the backup queue"""
         while self.running:
             try:
-                # Wait for items with timeout
                 try:
                     task = self.backup_queue.get(timeout=5)
                 except queue.Empty:
@@ -158,7 +177,6 @@ class AsyncSheetsBackup:
                 data_type = task.get('type')
                 data = task.get('data')
                 
-                # Process with retry
                 success = self._process_with_retry(data_type, data)
                 
                 if success:
@@ -186,19 +204,8 @@ class AsyncSheetsBackup:
                 elif data_type == 'status_update':
                     return self._backup_status_update(data['visit_id'], data['updates'])
                 else:
-                    print(f"[SheetsBackup] Unknown data type: {data_type}")
                     return False
                     
-            except gspread.exceptions.APIError as e:
-                if 'quota' in str(e).lower() or '429' in str(e):
-                    # Rate limit - wait longer
-                    delay = RETRY_DELAY_BASE * (2 ** attempt) * 2
-                    print(f"[SheetsBackup] Rate limited, waiting {delay}s...")
-                    time.sleep(delay)
-                else:
-                    print(f"[SheetsBackup] API error: {e}")
-                    delay = RETRY_DELAY_BASE * (2 ** attempt)
-                    time.sleep(delay)
             except Exception as e:
                 print(f"[SheetsBackup] Error on attempt {attempt + 1}: {e}")
                 delay = RETRY_DELAY_BASE * (2 ** attempt)
@@ -207,60 +214,46 @@ class AsyncSheetsBackup:
         return False
     
     def _backup_metadata(self, data: Dict[str, Any]) -> bool:
-        """Backup patient metadata"""
         sheet = self.metadata_sheet
         if not sheet:
             return False
-        
         row = [str(data.get(col, "")) for col in PATIENT_METADATA_COLS]
         sheet.append_row(row)
         return True
     
     def _backup_raw_data(self, rows: List[Dict[str, Any]]) -> bool:
-        """Backup raw scan data"""
         sheet = self.raw_data_sheet
         if not sheet:
             return False
-        
-        formatted_rows = []
-        for item in rows:
-            formatted_rows.append([str(item.get(col, "")) for col in RAW_SCAN_DATA_COLS])
-        
+        formatted_rows = [[str(item.get(col, "")) for col in RAW_SCAN_DATA_COLS] for item in rows]
         if formatted_rows:
             sheet.append_rows(formatted_rows)
         return True
     
     def _backup_features(self, features: Dict[str, Any]) -> bool:
-        """Backup intermediate features"""
         sheet = self.features_sheet
         if not sheet:
             return False
-        
         row = [str(features.get(col, "")) for col in INTERMEDIATE_FEATURES_COLS]
         sheet.append_row(row)
         return True
     
     def _backup_result(self, result: Dict[str, Any]) -> bool:
-        """Backup clinical result"""
         sheet = self.results_sheet
         if not sheet:
             return False
-        
         row = [str(result.get(col, "")) for col in CLINICAL_RESULTS_COLS]
         sheet.append_row(row)
         return True
     
     def _backup_status_update(self, visit_id: str, updates: Dict[str, Any]) -> bool:
-        """Update status in sheets"""
         sheet = self.metadata_sheet
         if not sheet:
             return False
-        
         try:
             cell = sheet.find(visit_id)
             if not cell:
-                return True  # Not found in sheets yet, that's OK
-            
+                return True
             row_idx = cell.row
             for col_name, value in updates.items():
                 if col_name in PATIENT_METADATA_COLS:
@@ -274,39 +267,34 @@ class AsyncSheetsBackup:
     # ============== PUBLIC API ==============
     
     def queue_metadata(self, data: Dict[str, Any]):
-        """Queue patient metadata for backup"""
-        self.backup_queue.put({'type': 'metadata', 'data': data})
-        print(f"[SheetsBackup] Queued metadata backup: {data.get('visit_id')}")
+        if GSPREAD_AVAILABLE:
+            self.backup_queue.put({'type': 'metadata', 'data': data})
+            print(f"[SheetsBackup] Queued metadata: {data.get('visit_id')}")
     
     def queue_raw_data(self, rows: List[Dict[str, Any]]):
-        """Queue raw data for backup"""
-        self.backup_queue.put({'type': 'raw_data', 'data': rows})
-        print(f"[SheetsBackup] Queued raw data backup: {len(rows)} rows")
+        if GSPREAD_AVAILABLE:
+            self.backup_queue.put({'type': 'raw_data', 'data': rows})
+            print(f"[SheetsBackup] Queued raw data: {len(rows)} rows")
     
     def queue_features(self, features: Dict[str, Any]):
-        """Queue features for backup"""
-        self.backup_queue.put({'type': 'features', 'data': features})
-        print(f"[SheetsBackup] Queued features backup: {features.get('visit_id')}")
+        if GSPREAD_AVAILABLE:
+            self.backup_queue.put({'type': 'features', 'data': features})
     
     def queue_result(self, result: Dict[str, Any]):
-        """Queue clinical result for backup"""
-        self.backup_queue.put({'type': 'result', 'data': result})
-        print(f"[SheetsBackup] Queued result backup: {result.get('visit_id')}")
+        if GSPREAD_AVAILABLE:
+            self.backup_queue.put({'type': 'result', 'data': result})
     
     def queue_status_update(self, visit_id: str, updates: Dict[str, Any]):
-        """Queue status update for backup"""
-        self.backup_queue.put({
-            'type': 'status_update', 
-            'data': {'visit_id': visit_id, 'updates': updates}
-        })
-        print(f"[SheetsBackup] Queued status update: {visit_id}")
+        if GSPREAD_AVAILABLE:
+            self.backup_queue.put({
+                'type': 'status_update',
+                'data': {'visit_id': visit_id, 'updates': updates}
+            })
     
     def stop(self):
-        """Stop the background worker"""
         self.running = False
         if self.worker_thread:
             self.worker_thread.join(timeout=5)
-        print("[SheetsBackup] Worker stopped")
 
 
 # Global instance

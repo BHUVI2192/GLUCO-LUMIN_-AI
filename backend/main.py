@@ -344,6 +344,28 @@ def get_result(visit_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@app.post("/api/upload_invalid_scan")
+async def upload_invalid_scan(data: dict):
+    """Log invalid/rejected scans for audit trail"""
+    try:
+        import csv_manager
+        
+        visit_id = data.get('visit_id')
+        error_message = data.get('error_message', 'Unknown error')
+        timestamp = data.get('timestamp')
+        
+        # Log using centralized manager serves all destinations (DB, CSV, Sheets)
+        # Value is 0.0 as it's a generic invalid scan without a specific sensor reading value usually
+        csv_manager.log_invalid_scan(visit_id, error_message, 0.0)
+        
+        return {"status": "logged", "message": "Invalid scan recorded for audit"}
+        
+    except Exception as e:
+        print(f"[ERROR] upload_invalid_scan: {e}")
+        return {"status": "error"}
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))

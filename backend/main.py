@@ -113,6 +113,7 @@ class PatientRegistration(BaseModel):
 class RawScanData(BaseModel):
     visit_id: str
     raw_data: str
+    timestamp: str
 
 
 # --- Endpoints ---
@@ -218,36 +219,46 @@ async def upload_raw(data: RawScanData, background_tasks: BackgroundTasks):
     import csv_manager
     import ml_pipeline
     
-    # Parse raw data
-    try:
-        values = [float(x) for x in data.raw_data.split(',') if x.strip()]
-    except:
-        raise HTTPException(status_code=400, detail="Invalid data format")
+    # Check for Explicit "No finger" status from App
+    raw_str = data.raw_data
+    is_no_finger = "No finger" in raw_str
     
-    # SERVER-SIDE VALIDATION
-    if not values:
-        raise HTTPException(status_code=400, detail="No data received")
+    values = []
+    mean_val = 0.0
     
-    mean_val = sum(values) / len(values)
-    
-    # Reject if out of prototype's range
-    if mean_val > 200:  # Prototype max is 150, allow 200 for safety margin
-        # Log as invalid scan
-        log_invalid_scan(data.visit_id, "Sensor value too high", mean_val)
-        return {"status": "error", "message": "Invalid sensor reading. No finger detected?"}
-    
-    if mean_val < 10:
-        log_invalid_scan(data.visit_id, "Sensor value too low", mean_val)
-        return {"status": "error", "message": "Sensor not responding"}
-    
-    # Data is valid - Save it first!
+    if not is_no_finger:
+        try:
+            values = [float(x) for x in raw_str.split(',') if x.strip()]
+            if values:
+                mean_val = sum(values) / len(values)
+        except:
+            print("[WARN] Parsing error for raw data")
+            
+    # VALIDATION LOGIC: Check Mean > 500 OR "No finger" text
+    if is_no_finger or mean_val > 500:
+        print(f"[REJECT] Scan rejected. No finger? (Mean={mean_val})")
+        
+        # Log Logic: Update status to ERROR/NO_FINGER
+        csv_manager.update_patient_status(data.visit_id, {
+            "ml1_status": "ERROR", 
+            "ml2_status": "ERROR",
+            "result_flag": "NO_FINGER_DETECTED",
+            "final_glucose": None
+        })
+        
+        # Also detailed invalid scan log
+        csv_manager.log_invalid_scan(data.visit_id, "NO_FINGER_DETECTED", mean_val)
+        
+        return {"status": "processed", "message": "No finger detected"}
+
+    # Proceed processing valid data
     try:
         parsed_rows = []
         for i, val in enumerate(values):
             parsed_rows.append({
                 "visit_id": data.visit_id,
                 "sample_index": str(i),
-                "signal_value": str(val) # Keep as string for consistency with DB model
+                "signal_value": str(val) 
             })
             
         csv_manager.append_raw_data(parsed_rows)
@@ -256,24 +267,6 @@ async def upload_raw(data: RawScanData, background_tasks: BackgroundTasks):
             "ml1_status": "PENDING"
         })
         
-        # Proceed with ML pipeline
-        # Use background task to avoid timeout, or await if fast enough. 
-        # User snippet had 'await run_pipeline', implying synchronous wait or async await.
-        # But for stability, background task is safer if it takes time.
-        # However, user snippet returns {"status": "processing"} which is consistent with background.
-        # BUT user snippet had `await run_pipeline(data.visit_id)`.
-        # If I await, the response waits. If I use background_tasks, it returns immediately.
-        # Given "return {'status': 'processing'}", probably background is better, 
-        # OR `run_pipeline` is fast.
-        # I'll stick to original background_tasks pattern but call it synchronously if user really intended 'await'.
-        # Actually proper pattern for `await run_pipeline` inside handler is that it waits.
-        # But let's look at user requirements: "Add server-side validation". 
-        # I will match the snippet structure:
-        
-        # await ml_pipeline.run_pipeline(data.visit_id) # If I uncomment this, it blocks.
-        
-        # I will use background tasks as it is more robust for web servers, 
-        # unless user explicitly forbids it. The snippet is just a snippet.
         background_tasks.add_task(ml_pipeline.run_pipeline, data.visit_id)
         
         return {"status": "processing"}

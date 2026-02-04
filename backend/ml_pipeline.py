@@ -12,6 +12,11 @@ import joblib
 import os
 import asyncio
 from datetime import datetime
+import warnings
+
+# Suppress runtime warnings from PCA (divide by zero)
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+
 from csv_manager import (
     update_patient_status, save_features, save_clinical_result, get_patient_metadata, get_raw_data
 )

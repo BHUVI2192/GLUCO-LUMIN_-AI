@@ -110,8 +110,9 @@ class PatientRegistration(BaseModel):
     family_diabetic_history: str
 
 
-class RawDataLines(BaseModel):
-    lines: List[str]
+class RawScanData(BaseModel):
+    visit_id: str
+    raw_data: str
 
 
 # --- Endpoints ---
@@ -212,55 +213,83 @@ def start_scan(patient: PatientRegistration):
 
 
 @app.post("/api/upload_raw")
-async def upload_raw(payload: RawDataLines, background_tasks: BackgroundTasks):
+async def upload_raw(data: RawScanData, background_tasks: BackgroundTasks):
     """Upload raw scan data and trigger ML pipeline"""
+    import csv_manager
+    import ml_pipeline
+    
+    # Parse raw data
     try:
-        import csv_manager
-        import ml_pipeline
-        
-        lines = payload.lines
-        if not lines:
-            raise HTTPException(status_code=400, detail="No data provided")
-
-        print(f"[API] Received {len(lines)} lines of raw data")
-
-        # Parse first line to get visit_id
-        first_line = lines[0].strip().split(',')
-        visit_id = first_line[0]
-        
-        if not visit_id.startswith("V"):
-            print(f"[WARN] Visit ID format: '{visit_id}'")
-
-        # Parse all rows
+        values = [float(x) for x in data.raw_data.split(',') if x.strip()]
+    except:
+        raise HTTPException(status_code=400, detail="Invalid data format")
+    
+    # SERVER-SIDE VALIDATION
+    if not values:
+        raise HTTPException(status_code=400, detail="No data received")
+    
+    mean_val = sum(values) / len(values)
+    
+    # Reject if out of prototype's range
+    if mean_val > 200:  # Prototype max is 150, allow 200 for safety margin
+        # Log as invalid scan
+        log_invalid_scan(data.visit_id, "Sensor value too high", mean_val)
+        return {"status": "error", "message": "Invalid sensor reading. No finger detected?"}
+    
+    if mean_val < 10:
+        log_invalid_scan(data.visit_id, "Sensor value too low", mean_val)
+        return {"status": "error", "message": "Sensor not responding"}
+    
+    # Data is valid - Save it first!
+    try:
         parsed_rows = []
-        for line in lines:
-            parts = line.strip().split(',')
-            if len(parts) >= 3:
-                parsed_rows.append({
-                    "visit_id": parts[0],
-                    "sample_index": parts[1],
-                    "signal_value": parts[2]
-                })
-
-        print(f"[API] Parsed {len(parsed_rows)} rows")
-        
+        for i, val in enumerate(values):
+            parsed_rows.append({
+                "visit_id": data.visit_id,
+                "sample_index": str(i),
+                "signal_value": str(val) # Keep as string for consistency with DB model
+            })
+            
         csv_manager.append_raw_data(parsed_rows)
-        csv_manager.update_patient_status(visit_id, {
+        csv_manager.update_patient_status(data.visit_id, {
             "raw_scan_id": f"RAW_{len(parsed_rows)}",
             "ml1_status": "PENDING"
         })
-
-        # Trigger ML Pipeline in background
-        background_tasks.add_task(ml_pipeline.run_pipeline, visit_id)
-
-        return {"status": "uploaded", "count": len(parsed_rows)}
         
-    except HTTPException:
-        raise
+        # Proceed with ML pipeline
+        # Use background task to avoid timeout, or await if fast enough. 
+        # User snippet had 'await run_pipeline', implying synchronous wait or async await.
+        # But for stability, background task is safer if it takes time.
+        # However, user snippet returns {"status": "processing"} which is consistent with background.
+        # BUT user snippet had `await run_pipeline(data.visit_id)`.
+        # If I await, the response waits. If I use background_tasks, it returns immediately.
+        # Given "return {'status': 'processing'}", probably background is better, 
+        # OR `run_pipeline` is fast.
+        # I'll stick to original background_tasks pattern but call it synchronously if user really intended 'await'.
+        # Actually proper pattern for `await run_pipeline` inside handler is that it waits.
+        # But let's look at user requirements: "Add server-side validation". 
+        # I will match the snippet structure:
+        
+        # await ml_pipeline.run_pipeline(data.visit_id) # If I uncomment this, it blocks.
+        
+        # I will use background tasks as it is more robust for web servers, 
+        # unless user explicitly forbids it. The snippet is just a snippet.
+        background_tasks.add_task(ml_pipeline.run_pipeline, data.visit_id)
+        
+        return {"status": "processing"}
+
     except Exception as e:
         print(f"[ERROR] upload_raw failed: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def log_invalid_scan(visit_id, reason, value):
+    # Save to separate "invalid_scans" table for audit
+    # Also log to Google Sheets with "ERROR" status
+    print(f"[INVALID SCAN] {visit_id}: {reason} (value={value})")
+    import csv_manager
+    csv_manager.log_invalid_scan(visit_id, reason, value)
 
 
 @app.get("/api/get_result/{visit_id}")

@@ -26,6 +26,7 @@ SHEET_NAME_METADATA = "GlucoLumin_Patient_Metadata"
 SHEET_NAME_RESULTS = "GlucoLumin_Clinical_Results"
 SHEET_NAME_RAW_DATA = "GlucoLumin_Raw_Scan_Data"
 SHEET_NAME_FEATURES = "GlucoLumin_Intermediate_Features"
+SHEET_NAME_INVALID_SCANS = "GlucoLumin_Invalid_Scans"
 
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
@@ -59,6 +60,10 @@ CLINICAL_RESULTS_COLS = [
     "visit_id", "patient_id", "glucose_mg_dl", "classification", "diet_advice", "timestamp"
 ]
 
+INVALID_SCANS_COLS = [
+    "visit_id", "reason", "value", "timestamp"
+]
+
 
 class AsyncSheetsBackup:
     """Non-blocking Google Sheets backup manager with graceful failure handling"""
@@ -75,6 +80,7 @@ class AsyncSheetsBackup:
         self._results_sheet = None
         self._raw_data_sheet = None
         self._features_sheet = None
+        self._invalid_scans_sheet = None
         
         # Only start if gspread is available
         if GSPREAD_AVAILABLE:
@@ -180,6 +186,12 @@ class AsyncSheetsBackup:
             self._features_sheet = self._get_sheet(SHEET_NAME_FEATURES, INTERMEDIATE_FEATURES_COLS)
         return self._features_sheet
     
+    @property
+    def invalid_scans_sheet(self):
+        if not self._invalid_scans_sheet:
+            self._invalid_scans_sheet = self._get_sheet(SHEET_NAME_INVALID_SCANS, INVALID_SCANS_COLS)
+        return self._invalid_scans_sheet
+    
     def _start_worker(self):
         """Start the background worker thread"""
         if self.worker_thread and self.worker_thread.is_alive():
@@ -228,6 +240,8 @@ class AsyncSheetsBackup:
                     return self._backup_result(data)
                 elif data_type == 'status_update':
                     return self._backup_status_update(data['visit_id'], data['updates'])
+                elif data_type == 'invalid_scan':
+                    return self._backup_invalid_scan(data)
                 else:
                     return False
                     
@@ -289,6 +303,14 @@ class AsyncSheetsBackup:
             print(f"[SheetsBackup] Error updating status: {e}")
             return False
     
+    def _backup_invalid_scan(self, data: Dict[str, Any]) -> bool:
+        sheet = self.invalid_scans_sheet
+        if not sheet:
+            return False
+        row = [str(data.get(col, "")) for col in INVALID_SCANS_COLS]
+        sheet.append_row(row)
+        return True
+    
     # ============== PUBLIC API ==============
     
     def queue_metadata(self, data: Dict[str, Any]):
@@ -315,6 +337,11 @@ class AsyncSheetsBackup:
                 'type': 'status_update',
                 'data': {'visit_id': visit_id, 'updates': updates}
             })
+
+    def queue_invalid_scan(self, data: Dict[str, Any]):
+        if GSPREAD_AVAILABLE:
+            self.backup_queue.put({'type': 'invalid_scan', 'data': data})
+            print(f"[SheetsBackup] Queued invalid scan: {data.get('visit_id')}")
     
     def stop(self):
         self.running = False

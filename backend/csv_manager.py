@@ -17,6 +17,7 @@ PATIENT_METADATA_FILE = os.path.join(BASE_DIR, "patient_metadata.csv")
 RAW_SCAN_DATA_FILE = os.path.join(BASE_DIR, "raw_scan_data.csv")
 INTERMEDIATE_FEATURES_FILE = os.path.join(BASE_DIR, "intermediate_features.csv")
 CLINICAL_RESULTS_FILE = os.path.join(BASE_DIR, "clinical_results.csv")
+INVALID_SCANS_FILE = os.path.join(BASE_DIR, "invalid_scans.csv")
 
 # CSV Headers (kept for reference)
 PATIENT_METADATA_COLS = [
@@ -40,6 +41,10 @@ CLINICAL_RESULTS_COLS = [
     "visit_id", "patient_id", "glucose_mg_dl", "classification", "diet_advice", "timestamp"
 ]
 
+INVALID_SCANS_COLS = [
+    "visit_id", "reason", "value", "timestamp"
+]
+
 
 def initialize_csvs():
     """Initialize PostgreSQL tables (legacy function name kept for compatibility)"""
@@ -58,6 +63,7 @@ def _init_csv_fallback():
     _init_file(RAW_SCAN_DATA_FILE, RAW_SCAN_DATA_COLS)
     _init_file(INTERMEDIATE_FEATURES_FILE, INTERMEDIATE_FEATURES_COLS)
     _init_file(CLINICAL_RESULTS_FILE, CLINICAL_RESULTS_COLS)
+    _init_file(INVALID_SCANS_FILE, INVALID_SCANS_COLS)
 
 
 def _init_file(filepath: str, columns: List[str]):
@@ -283,3 +289,37 @@ def _csv_get_raw_data(visit_id: str) -> List[Dict[str, Any]]:
     rows = df[df['visit_id'] == visit_id]
     
     return rows.to_dict('records')
+
+
+def log_invalid_scan(visit_id: str, reason: str, value: float):
+    """
+    Log invalid scan.
+    1. PostgreSQL (primary)
+    2. Google Sheets (backup)
+    """
+    data = {
+        "visit_id": visit_id,
+        "reason": reason,
+        "value": value,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    
+    # 1. Save to PostgreSQL (primary)
+    success = db.add_invalid_scan(data)
+    
+    if not success:
+        print("[DataManager] PostgreSQL failed for invalid scan, falling back to CSV")
+        _csv_log_invalid_scan(data)
+    
+    # 2. Queue for Google Sheets backup (async, non-blocking)
+    sheets_backup.queue_invalid_scan(data)
+
+
+def _csv_log_invalid_scan(data: dict):
+    """Fallback: Save to CSV"""
+    df = pd.DataFrame([data])
+    
+    if os.path.exists(INVALID_SCANS_FILE):
+        df.to_csv(INVALID_SCANS_FILE, mode='a', header=False, index=False)
+    else:
+        df.to_csv(INVALID_SCANS_FILE, index=False)

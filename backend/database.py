@@ -102,6 +102,17 @@ class ClinicalResult(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 
+class InvalidScan(Base):
+    """Invalid sensor readings log"""
+    __tablename__ = "invalid_scans"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    visit_id = Column(String(50), index=True, nullable=False)
+    reason = Column(String(200))
+    value = Column(Float)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+
 # ============== DATABASE FUNCTIONS ==============
 
 def create_tables():
@@ -332,6 +343,29 @@ def get_raw_data(visit_id: str) -> List[Dict[str, Any]]:
                 }
                 for row in rows
             ]
+
     except Exception as e:
         print(f"[Database] Error getting raw data: {e}")
         return []
+
+
+def add_invalid_scan(data: Dict[str, Any]) -> bool:
+    """Save invalid scan record"""
+    try:
+        # Convert NumPy types to Python natives
+        data = numpy_to_python(data)
+        
+        with get_db() as db:
+            scan = InvalidScan(
+                visit_id=data.get('visit_id'),
+                reason=data.get('reason'),
+                value=data.get('value'),
+                timestamp=data.get('timestamp') or datetime.utcnow()
+            )
+            db.add(scan)
+            db.commit()
+            print(f"[Database] Added invalid scan record: {data.get('visit_id')}")
+            return True
+    except Exception as e:
+        print(f"[Database] Error adding invalid scan: {e}")
+        return False

@@ -11,6 +11,9 @@ import uuid
 import os
 import traceback
 from sqlalchemy import text
+import numpy as np
+from database import get_db, RawScanData as RawScanDataORM
+
 
 # Initialize FastAPI
 app = FastAPI(title="GlucoLumin Backend", version="2.0.0")
@@ -113,7 +116,8 @@ class PatientRegistration(BaseModel):
 class RawScanData(BaseModel):
     visit_id: str
     raw_data: str
-    timestamp: str
+    timestamp: Optional[str] = None
+
 
 
 # --- Endpoints ---
@@ -146,6 +150,7 @@ def health_check():
     # Check models
     model1_exists = os.path.exists(os.path.join(os.path.dirname(__file__), "glucose_model.pkl"))
     model2_exists = os.path.exists(os.path.join(os.path.dirname(__file__), "glucose_linear_model_v5.pkl"))
+
     
     return {
         "status": "healthy",
@@ -215,78 +220,121 @@ def start_scan(patient: PatientRegistration):
 
 @app.post("/api/upload_raw")
 async def upload_raw(data: RawScanData, background_tasks: BackgroundTasks):
-    """Upload raw scan data and trigger ML pipeline"""
+    """
+    Strict contract: JSON payload with comma-separated numbers in 'raw_data'.
+    1. Parse & Validate
+    2. Store in DB (COMMIT)
+    3. Trigger ML Pipeline
+    """
     import csv_manager
     import ml_pipeline
-    
-    # Check for Explicit "No finger" status from App
-    raw_str = data.raw_data
-    print(f"DEBUG: Received raw_data: {raw_str[:100]}")
-    
-    is_no_finger = "No finger" in raw_str
-    
-    values = []
-    mean_val = 0.0
-    
-    if not is_no_finger:
-        try:
-            # MORE ROBUST PARSING:
-            # 1. Split by comma
-            # 2. Strip whitespace
-            # 3. Remove accidental headers or non-numeric strings
-            # 4. Handle float conversion safely
-            values = [
-                float(x) 
-                for x in raw_str.split(',') 
-                if x.strip() and x.strip().replace('.', '', 1).isdigit()
-            ]
-            
-            if values:
-                mean_val = sum(values) / len(values)
-        except Exception as e:
-            print(f"[WARN] Parsing error for raw data: {e}")
-            
-    # VALIDATION LOGIC: Check Mean > 500 OR "No finger" text
-    if is_no_finger or mean_val > 500:
-        print(f"[REJECT] Scan rejected. No finger? (Mean={mean_val})")
-        
-        # Log Logic: Update status to ERROR/NO_FINGER
-        csv_manager.update_patient_status(data.visit_id, {
-            "ml1_status": "ERROR", 
-            "ml2_status": "ERROR",
-            "result_flag": "NO_FINGER_DETECTED",
-            "final_glucose": None
-        })
-        
-        # Also detailed invalid scan log
-        csv_manager.log_invalid_scan(data.visit_id, "NO_FINGER_DETECTED", mean_val)
-        
-        return {"status": "processed", "message": "No finger detected"}
+    from sheets_backup import sheets_backup
 
-    # Proceed processing valid data
+    print(f"[API] Raw payload for {data.visit_id}: {data.raw_data[:100]}...")
+
+    # 1. Parse raw string -> list of floats
+    values = parse_raw_values(data.raw_data)
+    
+    # 2. Basic Validation (No finger / Sensor Error)
+    if not values:
+        # Case: Empty or totally non-numeric
+        msg = "NO_NUMERIC_DATA"
+        log_invalid_scan(data.visit_id, msg, 0.0)
+        return {"status": "error", "message": msg}
+
+    # Statistical checks
+    arr = np.array(values, dtype=float)
+    mean_val = float(arr.mean())
+    std_val = float(arr.std())
+    
+    # Heuristic thresholds (from prototype experience)
+    # Mean > 200 (saturated) or < 5 (floating/open)
+    # Std < 0.01 (flatline)
+    if mean_val > 500 or mean_val < 5 or std_val < 0.01:
+        flag = "NO_FINGER_DETECTED" if mean_val > 500 or std_val < 0.01 else "SENSOR_ERROR"
+        
+        print(f"[REJECT] {data.visit_id}: {flag} (Mean={mean_val:.2f}, Std={std_val:.2f})")
+        
+        # Log error state
+        error_update = {
+            "ml1_status": "ERROR",
+            "ml2_status": "ERROR", 
+            "result_flag": flag,
+            "final_glucose": None,
+            "diet_advice": "No valid signal detected. Please rescan."
+        }
+        
+        # Update DB/Sheets via Manager
+        csv_manager.update_patient_status(data.visit_id, error_update)
+        csv_manager.log_invalid_scan(data.visit_id, flag, mean_val)
+        
+        return {"status": "error", "message": flag}
+
+    # 3. Valid Data -> Store in DB (Synchronous Commit)
     try:
-        parsed_rows = []
-        for i, val in enumerate(values):
-            parsed_rows.append({
-                "visit_id": data.visit_id,
-                "sample_index": str(i),
-                "signal_value": str(val) 
-            })
-            
-        csv_manager.append_raw_data(parsed_rows)
+        timestamp = datetime.utcnow()
+        if data.timestamp:
+            try:
+                timestamp = datetime.fromisoformat(data.timestamp.replace('Z', '+00:00'))
+            except:
+                pass
+
+        with get_db() as db:
+            # Create bulk objects
+            rows = [
+                RawScanDataORM(
+                    visit_id=data.visit_id,
+                    sample_index=str(i),
+                    signal_value=str(v)
+                )
+                for i, v in enumerate(values)
+            ]
+            db.add_all(rows)
+            db.commit()
+            print(f"[API] Committed {len(rows)} raw rows for {data.visit_id}")
+
+        # 4. Trigger ML Pipeline
+        # Also update status to 'processing'
         csv_manager.update_patient_status(data.visit_id, {
-            "raw_scan_id": f"RAW_{len(parsed_rows)}",
+            "raw_scan_id": f"RAW_{len(values)}",
             "ml1_status": "PENDING"
         })
         
         background_tasks.add_task(ml_pipeline.run_pipeline, data.visit_id)
         
-        return {"status": "processing"}
+        return {"status": "processing", "visit_id": data.visit_id}
 
     except Exception as e:
         print(f"[ERROR] upload_raw failed: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def parse_raw_values(raw_str: str) -> List[float]:
+    """
+    Robustly parse comma-separated string into list of floats.
+    Handles extra whitespace, newlines, and mixed content.
+    """
+    if "No finger" in raw_str:
+        return []
+        
+    vals = []
+    # Split by comma or newline
+    tokens = raw_str.replace('\n', ',').split(',')
+    
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            # Remove potential null bytes or odd chars
+            clean_token = token.replace('\x00', '')
+            vals.append(float(clean_token))
+        except ValueError:
+            continue
+            
+    return vals
+
 
 
 def log_invalid_scan(visit_id, reason, value):

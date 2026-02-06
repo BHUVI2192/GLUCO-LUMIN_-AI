@@ -18,8 +18,12 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from csv_manager import (
-    update_patient_status, save_features, save_clinical_result, get_patient_metadata, get_raw_data
+    update_patient_status, save_features, save_clinical_result, get_patient_metadata
 )
+from database import engine
+from sqlalchemy import text
+from type_utils import numpy_to_python
+
 
 # Constants
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -239,45 +243,55 @@ class MLPipeline:
             "skin_tone_encoded": skin_val
         }
 
+    def _load_raw_signal(self, visit_id: str) -> np.ndarray:
+        """Fetch raw signal from DB with retry logic."""
+        for attempt in range(3):
+            try:
+                # Direct SQL for speed and ensuring freshness
+                query = text("SELECT signal_value FROM raw_scan_data WHERE visit_id = :vid ORDER BY CAST(sample_index AS INTEGER) ASC")
+                # Note: sample_index is String in schema, casting to INT for sort safety if possible, 
+                # but if it was stored as '0', '1'... it sorts okay as text usually until '10' vs '2'.
+                # Better to just trust insertion order or sort by ID if needed. 
+                # Let's use the DB index.
+                
+                df = pd.read_sql(query, engine, params={"vid": visit_id})
+                
+                if not df.empty:
+                    # Convert to numeric, errors='coerce' to handle any debris
+                    vals = pd.to_numeric(df['signal_value'], errors='coerce').dropna()
+                    if not vals.empty:
+                        return vals.values
+                        
+                print(f"[{visit_id}] Data not found yet. Retry {attempt+1}/3...")
+                import time
+                time.sleep(1)
+            except Exception as e:
+                print(f"[{visit_id}] DB Read Error: {e}")
+                
+        return np.array([])
+
+
     async def process_visit(self, visit_id: str):
         print(f"[{visit_id}] Starting 2-Stage ML Pipeline (Redesigned)...")
         
-        # Retry logic: Wait for DB commit if needed (3 attempts)
-        raw_data = []
-        for attempt in range(3):
-            raw_data = get_raw_data(visit_id)
-            if raw_data:
-                break
-            print(f"[{visit_id}] Attempt {attempt+1}: raw_data not found yet. Waiting 1s...")
-            await asyncio.sleep(1)
+        # 1. Load Data (Robust method)
+        signal = self._load_raw_signal(visit_id)
         
-        if not raw_data:
-            print(f"[{visit_id}] No raw data found in database after retries.")
+        if len(signal) < 10:
+            print(f"[{visit_id}] Insufficient data found (N={len(signal)}) after retries.")
+            update_patient_status(visit_id, {
+                "ml1_status": "ERROR",
+                "ml2_status": "ERROR", 
+                "result_flag": "NO_RAW_DATA",
+                "diet_advice": "No raw data received. Please try again."
+            })
             return
             
         try:
-            patient_data = pd.DataFrame(raw_data)
-            
-            if patient_data.empty:
-                print(f"[{visit_id}] Empty patient data")
-                return
-
-            # Clean signal: Convert to numeric, coerce errors (e.g. "No finger?") to NaN, then drop
-            raw_signal = pd.to_numeric(patient_data['signal_value'], errors='coerce')
-            raw_signal = raw_signal.dropna()
-            
-            if raw_signal.empty:
-                print(f"[{visit_id}] No valid numeric signal data found (all 'No finger?' or errors).")
-                return
-
-            signal = raw_signal.values
-            if len(signal) < 5:
-                print(f"[{visit_id}] Insufficient signal length after cleaning: {len(signal)}")
-                return
-
             # Signal Refinement (Savgol)
             if len(signal) > 11:
                 signal = savgol_filter(signal, window_length=11, polyorder=3)
+
 
             metadata = get_patient_metadata(visit_id)
             if not metadata: raise ValueError("No Metadata")
@@ -288,8 +302,9 @@ class MLPipeline:
 
             # Features
             features = self._calculate_features(signal, skin_int)
-            save_features(visit_id, features)
+            save_features(visit_id, numpy_to_python(features))
             update_patient_status(visit_id, {"ml1_status": "DONE"})
+
 
             # DETERMINE STAGE 1 ESTIMATE
             # If Model 1 exists, use it. Else fall back to direct feature (feat_mean).
@@ -348,7 +363,8 @@ class MLPipeline:
                 "diet_advice": advice,
                 "timestamp": datetime.now().isoformat()
             }
-            save_clinical_result(result_record)
+            save_clinical_result(numpy_to_python(result_record))
+
             
             update_patient_status(visit_id, {
                 "final_glucose": round(predicted_glucose, 2),

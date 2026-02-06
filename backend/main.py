@@ -221,6 +221,8 @@ async def upload_raw(data: RawScanData, background_tasks: BackgroundTasks):
     
     # Check for Explicit "No finger" status from App
     raw_str = data.raw_data
+    print(f"DEBUG: Received raw_data: {raw_str[:100]}")
+    
     is_no_finger = "No finger" in raw_str
     
     values = []
@@ -228,11 +230,21 @@ async def upload_raw(data: RawScanData, background_tasks: BackgroundTasks):
     
     if not is_no_finger:
         try:
-            values = [float(x) for x in raw_str.split(',') if x.strip()]
+            # MORE ROBUST PARSING:
+            # 1. Split by comma
+            # 2. Strip whitespace
+            # 3. Remove accidental headers or non-numeric strings
+            # 4. Handle float conversion safely
+            values = [
+                float(x) 
+                for x in raw_str.split(',') 
+                if x.strip() and x.strip().replace('.', '', 1).isdigit()
+            ]
+            
             if values:
                 mean_val = sum(values) / len(values)
-        except:
-            print("[WARN] Parsing error for raw data")
+        except Exception as e:
+            print(f"[WARN] Parsing error for raw data: {e}")
             
     # VALIDATION LOGIC: Check Mean > 500 OR "No finger" text
     if is_no_finger or mean_val > 500:

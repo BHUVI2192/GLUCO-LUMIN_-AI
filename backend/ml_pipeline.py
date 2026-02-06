@@ -15,7 +15,7 @@ from datetime import datetime
 import warnings
 
 # Suppress runtime warnings from PCA (divide by zero)
-warnings.filterwarnings('ignore', category=RuntimeWarning)
+warnings.filterwarnings('ignore')
 
 from csv_manager import (
     update_patient_status, save_features, save_clinical_result, get_patient_metadata, get_raw_data
@@ -241,17 +241,21 @@ class MLPipeline:
 
     async def process_visit(self, visit_id: str):
         print(f"[{visit_id}] Starting 2-Stage ML Pipeline (Redesigned)...")
-        await asyncio.sleep(1)
-
-        try:
-            # --- STAGE 1: SIGNAL PROCESSING & CALIBRATION ---
-            # Read from PostgreSQL database (not CSV files)
+        
+        # Retry logic: Wait for DB commit if needed (3 attempts)
+        raw_data = []
+        for attempt in range(3):
             raw_data = get_raw_data(visit_id)
+            if raw_data:
+                break
+            print(f"[{visit_id}] Attempt {attempt+1}: raw_data not found yet. Waiting 1s...")
+            await asyncio.sleep(1)
+        
+        if not raw_data:
+            print(f"[{visit_id}] No raw data found in database after retries.")
+            return
             
-            if not raw_data:
-                print(f"[{visit_id}] No raw data found in database")
-                return
-            
+        try:
             patient_data = pd.DataFrame(raw_data)
             
             if patient_data.empty:
